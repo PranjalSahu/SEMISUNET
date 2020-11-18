@@ -1448,59 +1448,9 @@ def evaluate_result_new(pred, valy):
     
     return val_dice
 
-def train_model(model, batch_size, optimizer, criterion, trainx, trainy, augment=False):
-    loss_array = []
-    
-    model.train()
-    
-    for i in range(len(trainx)//batch_size):
-        x = trainx[i*batch_size:(i+1)*batch_size, :, :, :]
-        y = trainy[i*batch_size:(i+1)*batch_size, :, :, :]
-        
-        if augment:
-            t1 = random.randint(0, 100)
-            if t1 > 60:
-                for k in range(x.shape[0]):
-                    rotv = random.randint(0, 3)
-                    x[k, 0, :, :] = np.rot90(x[k, 0, :, :], rotv)
-                    y[k, 0, :, :] = np.rot90(y[k, 0, :, :], rotv)
-        
-        x = torch.tensor(x, device=device).float()
-        y = torch.tensor(y, device=device).float()
-        
-        optimizer.zero_grad()
-        output = model.forward(x)        
-        loss   = criterion(output , y)
-        loss.backward()
-        
-        loss_array.append(loss.item())
-        optimizer.step()
-    
-    loss_array = np.mean(loss_array)
-    return loss_array
 
-def prepare_batch(batch_size, k_means, trainx_l, trainy_l, h):
-    a = []
-    b = []
-    
-    for i in range(int(batch_size/2)):
-        idx = random.randint(0, trainx_l.shape[0]-1)
-        c   = k_means.predict(np.reshape(trainx_l[idx].astype('float32'), [1, 512*512]))[0]
-        
-        a.append(trainx_l[idx])
-        b.append(trainy_l[idx])
-        
-        idx = random.randint(0, len(h[c])-1)
-        t1  = np.expand_dims(np.load(h[c][idx]), 0)
-        t2  = np.expand_dims(np.load(h[c][idx].replace('-x', '-y')), 0)
-        
-        a.append(t1)
-        b.append(t2)
-   
-    a1 = np.array(a).astype('float16')
-    b1 = np.array(b).astype('float16')
-   
-    return a1, b1
+
+
 
 def store_cluster_slices(model_teacher, k_means, version):
     epoch_array = np.arange(79)
@@ -1776,7 +1726,7 @@ def get_xforms(mode="train", keys=("image", "label")):
         LoadNiftid(keys),
         AddChanneld(keys),
         Orientationd(keys, axcodes="LPS"),
-        Spacingd(keys, pixdim=(0.75, 0.75, 2.25), mode=("bilinear", "nearest")[: len(keys)]),
+        Spacingd(keys, pixdim=(1, 1, 3), mode=("bilinear", "nearest")[: len(keys)]),
         ScaleIntensityRanged(keys[0], a_min=-1000.0, a_max=500.0, b_min=0.0, b_max=1.0, clip=True),
     ]
     if mode == "train":
@@ -1793,9 +1743,9 @@ def get_xforms(mode="train", keys=("image", "label")):
                 ),
                 RandCropByPosNegLabeld(keys, label_key=keys[1], spatial_size=(192, 192, 16), num_samples=3),
                 #RandGaussianNoised(keys[0], prob=0.15, std=0.01),
-                RandFlipd(keys, spatial_axis=0, prob=0.5),
+                #RandFlipd(keys, spatial_axis=0, prob=0.5),
                 RandFlipd(keys, spatial_axis=1, prob=0.5),
-                RandFlipd(keys, spatial_axis=2, prob=0.5),
+                #RandFlipd(keys, spatial_axis=2, prob=0.5),
             ]
         )
         dtype = (np.float32, np.uint8)
@@ -1866,7 +1816,7 @@ def get_inferer(_mode=None):
     return inferer
 
 data_folder  = '/media/yu-hao/WindowsData/COVID-19-20_v2/Train/'
-model_folder = './runs4/'
+model_folder = './runs7/'
 
 monai.config.print_config()
 monai.utils.set_determinism(seed=0)
@@ -1890,19 +1840,19 @@ val_files = [{keys[0]: img, keys[1]: seg} for img, seg in zip(images[-n_val:], l
 
 # create a training data loader
 batch_size = 2
-train_transforms = get_xforms("train", keys)
-train_ds = monai.data.CacheDataset(data=train_files, transform=train_transforms, cache_rate=0.1)
-train_loader = monai.data.DataLoader(
-    train_ds,
-    batch_size=batch_size,
-    shuffle=True,
-    num_workers=2,
-    pin_memory=torch.cuda.is_available(),
-)
+#train_transforms = get_xforms("train", keys)
+#train_ds = monai.data.CacheDataset(data=train_files, transform=train_transforms, cache_rate=0.5)
+#train_loader = monai.data.DataLoader(
+#    train_ds,
+#    batch_size=batch_size,
+#    shuffle=True,
+#    num_workers=2,
+#    pin_memory=torch.cuda.is_available(),
+#)
 
 # create a validation data loader
 val_transforms = get_xforms("val", keys)
-val_ds = monai.data.CacheDataset(data=val_files, transform=val_transforms, cache_rate=0.1)
+val_ds = monai.data.CacheDataset(data=val_files, transform=val_transforms, cache_rate=0.5)
 val_loader = monai.data.DataLoader(
     val_ds,
     batch_size=1,  # image-level batch to the sliding window method, not the window-level batch
@@ -1916,7 +1866,7 @@ net    = SUNet_3D(1, 2)
 net    = net.to(device)
 net.load_state_dict(torch.load('/home/yu-hao/SEMISUNET/runs3/net_key_metric=0.6124.pt'))
 
-max_epochs, lr, momentum = 500, 1e-4, 0.95
+max_epochs, lr, momentum = 500, 1e-5, 0.95
 logging.info(f"epochs {max_epochs}, lr {lr}, momentum {momentum}")
 opt = torch.optim.Adam(net.parameters(), lr=lr)
 
@@ -1949,22 +1899,22 @@ train_handlers = [
     ValidationHandler(validator=evaluator, interval=1, epoch_level=True),
     StatsHandler(tag_name="train_loss", output_transform=lambda x: x["loss"]),
 ]
-trainer = monai.engines.SupervisedTrainer(
-    device=device,
-    max_epochs=max_epochs,
-    train_data_loader=train_loader,
-    network=net,
-    optimizer=opt,
-    loss_function=MyCELoss(),
-    inferer=get_inferer(),
-    key_train_metric=None,
-    train_handlers=train_handlers,
-    amp=amp,
-)
-trainer.run()
+#trainer = monai.engines.SupervisedTrainer(
+#    device=device,
+#    max_epochs=max_epochs,
+#    train_data_loader=train_loader,
+#    network=net,
+#    optimizer=opt,
+#    loss_function=MyCELoss(),
+#    inferer=get_inferer(),
+#    key_train_metric=None,
+#    train_handlers=train_handlers,
+#    amp=amp,
+#)
+#trainer.run()
 
 
-def infer(data_folder=".", model_folder="runs", prediction_folder="output"):
+def infer(data_folder=".", model_folder="runs", prediction_folder="output1"):
     """
     run inference, the output folder will be "./output"
     """
@@ -2006,8 +1956,8 @@ def infer(data_folder=".", model_folder="runs", prediction_folder="output"):
             n = 1.0
             for _ in range(4):
                 # test time augmentations
-                _img = RandGaussianNoised(keys[0], prob=1.0, std=0.01)(infer_data)[keys[0]]
-                pred = inferer(_img.to(device), net)
+                _img  = infer_data[keys[0]]#RandGaussianNoised(keys[0], prob=1.0, std=0.01)(infer_data)[keys[0]]
+                pred  = inferer(_img.to(device), net)
                 preds = preds + pred
                 n = n + 1.0
                 for dims in [[2], [3]]:
@@ -2016,7 +1966,7 @@ def infer(data_folder=".", model_folder="runs", prediction_folder="output"):
                     preds = preds + pred
                     n = n + 1.0
             preds = preds / n
-            preds = (preds.argmax(dim=1, keepdims=True)).float()
+            #preds = (preds.argmax(dim=1, keepdims=True)).float()
             saver.save_batch(preds, infer_data["image_meta_dict"])
 
     # copy the saved segmentations into the required folder structure for submission
@@ -2032,16 +1982,16 @@ def infer(data_folder=".", model_folder="runs", prediction_folder="output"):
         shutil.copy(f, to_name)
     logging.info(f"predictions copied to {submission_dir}.")
 
-#infer(data_folder="/media/yu-hao/WindowsData/COVID-19-20_v2/Validation/", model_folder="./runs3", prediction_folder="output")
-#prediction_folder = './output/'
-#submission_dir = os.path.join(prediction_folder, "to_submit")
-#if not os.path.exists(submission_dir):
-#    os.makedirs(submission_dir)
-#files = glob.glob(os.path.join(prediction_folder, "volume*", "*.nii.gz"))
-#for f in files:
-#    new_name = os.path.basename(f)
-#    new_name = new_name[len("volume-covid19-A-0") :]
-#    new_name = new_name[: -len("_ct_seg.nii.gz")] + ".nii.gz"
-#    to_name = os.path.join(submission_dir, new_name)
-#    shutil.copy(f, to_name)
-#    logging.info(f"predictions copied to {submission_dir}.")
+infer(data_folder="/media/yu-hao/WindowsData/COVID-19-20_v2/Validation/", model_folder="./runs6", prediction_folder="output")
+prediction_folder = './output/'
+submission_dir = os.path.join(prediction_folder, "to_submit")
+if not os.path.exists(submission_dir):
+    os.makedirs(submission_dir)
+files = glob.glob(os.path.join(prediction_folder, "volume*", "*.nii.gz"))
+for f in files:
+    new_name = os.path.basename(f)
+    new_name = new_name[len("volume-covid19-A-0") :]
+    new_name = new_name[: -len("_ct_seg.nii.gz")] + ".nii.gz"
+    to_name = os.path.join(submission_dir, new_name)
+    shutil.copy(f, to_name)
+    logging.info(f"predictions copied to {submission_dir}.")
